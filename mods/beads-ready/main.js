@@ -11,17 +11,30 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, focused, exec, openOverlay, nextCommand } from "herdr";
+import { spaces, panes, focused, exec, openOverlay, nextCommand, appHome, readTextFile, props, closeOverlay } from "herdr";
 
 const MIN = [1, 3];
-// A beads binary on this machine is used first; if it is missing (or older than MIN) the toolbox container runs it.
-// Set TOOLBOX to null to disable the fallback.
-const TOOLBOX = "code";
-// Workaround: ~/.config/environment.d/beads-dolt.conf (removed) leaked a shared-Dolt-server setup into this app's
-// environment. Run the local beads without it so it uses the project's own .beads database.
-const UNSET = ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT", "BEADS_DOLT_SERVER_USER", "BEADS_DOLT_AUTO_START"].flatMap((v) => ["-u", v]);
-const cmdFor = (runner, args) => (runner === "toolbox" ? ["toolbox", ["run", "-c", TOOLBOX, "beads", ...args]] : ["env", [...UNSET, "beads", ...args]]);
-const runnersFor = (on) => (TOOLBOX && !on ? ["local", "toolbox"] : ["local"]);
+// A beads binary on this machine is used first; if it is missing (or older than MIN) the configured toolbox runs it.
+// Optional per-user settings in <herdr-app home>/data/beads-ready/config.json, e.g.
+//   { "toolbox": "code", "unsetEnv": ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST"] }
+// toolbox: a toolbox container that runs beads/vega when none is found on this machine.
+// unsetEnv: environment variables the local beads is started without. Both are off by default.
+let CFG = { toolbox: null, unsetEnv: [] };
+async function loadConfig() {
+  try {
+    const text = await readTextFile(`${appHome()}/data/beads-ready/config.json`);
+    if (!text) return;
+    const c = JSON.parse(text);
+    CFG = {
+      toolbox: typeof c.toolbox === "string" && c.toolbox ? c.toolbox : null,
+      unsetEnv: Array.isArray(c.unsetEnv) ? c.unsetEnv.filter((v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v)) : [],
+    };
+  } catch {}
+}
+const cmdFor = (runner, args) => (runner === "toolbox"
+  ? ["toolbox", ["run", "-c", CFG.toolbox, "beads", ...args]]
+  : CFG.unsetEnv.length ? ["env", [...CFG.unsetEnv.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
+const runnersFor = (on) => (CFG.toolbox && !on ? ["local", "toolbox"] : ["local"]);
 
 const POLL_MS = 5000; // refresh while shown
 const WATCH_MS = 1500; // cheap check whether the focused folder changed
@@ -46,7 +59,10 @@ const FLASH = { bg: "#9bcd9b", panel: "#c9e6c9", hi: "#000000", mid: "#0a140a", 
 
 const rand = (a, b) => a + Math.random() * (b - a);
 
+// Props { cwd, on? } pin the panel to one folder instead of following the focused pane.
 function location() {
+  const pin = props()?.cwd;
+  if (typeof pin === "string" && pin) return { cwd: pin, on: props()?.on ?? null };
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
@@ -91,8 +107,8 @@ export default class BeadsReady extends View {
     cx.timer.after(250, step);
     this.refresh(cx);
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
-    // `herdr-app do beads-ready.shock` triggers a surge on demand.
-    cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "shock" && !this.shock) this.startShock(cx); } });
+    // `herdr-app do beads-ready.shock` triggers a surge on demand; `beads-ready.close` closes a copy opened as an overlay.
+    cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "shock" && !this.shock) this.startShock(cx); else if (c === "close" && props()?.overlay) closeOverlay(props().overlay); } });
     cx.timer.every(WATCH_MS, (cx) => {
       if (keyOf() !== this.context) this.refresh(cx);
       if (!this.shock && Date.now() >= this.nextShock) this.startShock(cx);
@@ -130,6 +146,7 @@ export default class BeadsReady extends View {
     const { cwd, on } = location();
     cx.spawn(async (cx) => {
       let state, info = "", items = [], blocked = [];
+      await loadConfig();
       try {
         let runner = null, tooOld = null;
         for (const name of runnersFor(on)) {
@@ -141,7 +158,7 @@ export default class BeadsReady extends View {
         }
         this.runner = runner;
         if (!runner && tooOld) { state = "old"; info = `beads >= ${MIN.join(".")} required, found: ${tooOld}`; }
-        else if (!runner) { state = "missing"; info = "`beads` not found" + (TOOLBOX && !on ? ` (neither locally nor in toolbox ${TOOLBOX}).` : "."); }
+        else if (!runner) { state = "missing"; info = "`beads` not found" + (CFG.toolbox && !on ? ` (neither locally nor in toolbox ${CFG.toolbox}).` : "."); }
         else if (!cwd) { state = "error"; info = "No working directory."; }
         else {
           const r = await exec(...cmdFor(runner, ["ready", "--json", "--limit", "0"]), { cwd, on });
@@ -316,6 +333,6 @@ export default class BeadsReady extends View {
       list.child(bay);
     }
     root.child(list);
-    return root.child(txt(`SPECIAL ORDER 937 // CREW EXPENDABLE // VIA ${up(this.runner === "toolbox" ? `TOOLBOX ${TOOLBOX}` : "LOCAL")}`, C.dim, 10, 6));
+    return root.child(txt(`SPECIAL ORDER 937 // CREW EXPENDABLE // VIA ${up(this.runner === "toolbox" ? `TOOLBOX ${CFG.toolbox}` : "LOCAL")}`, C.dim, 10, 6));
   }
 }

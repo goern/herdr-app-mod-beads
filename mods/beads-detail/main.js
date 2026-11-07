@@ -14,11 +14,33 @@ import { v_flex, h_flex } from "gpui-base";
 import { exec, props, closeOverlay, appHome, writeTextFile, readTextFile, notify } from "herdr";
 
 // Detail dialog for one bead, opened by the beads-ready panel. Props: { id, cwd, on, overlay }.
-const TOOLBOX = "code"; // keep in sync with beads-ready; the panel passes which runner it picked
-// Workaround: ~/.config/environment.d/beads-dolt.conf (removed) leaked a shared-Dolt-server setup into this app's
-// environment. Run the local beads without it so it uses the project's own .beads database.
-const UNSET = ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT", "BEADS_DOLT_SERVER_USER", "BEADS_DOLT_AUTO_START"].flatMap((v) => ["-u", v]);
-const cmdFor = (runner, args) => (runner === "toolbox" ? ["toolbox", ["run", "-c", TOOLBOX, "beads", ...args]] : ["env", [...UNSET, "beads", ...args]]);
+// Optional per-user settings in <herdr-app home>/data/beads-ready/config.json, e.g.
+//   { "toolbox": "code", "unsetEnv": ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST"] }
+// toolbox: a toolbox container that runs beads/vega when none is found on this machine.
+// unsetEnv: environment variables the local beads is started without. Both are off by default.
+let CFG = { toolbox: null, unsetEnv: [] };
+async function loadConfig() {
+  try {
+    const text = await readTextFile(`${appHome()}/data/beads-ready/config.json`);
+    if (!text) return;
+    const c = JSON.parse(text);
+    CFG = {
+      toolbox: typeof c.toolbox === "string" && c.toolbox ? c.toolbox : null,
+      unsetEnv: Array.isArray(c.unsetEnv) ? c.unsetEnv.filter((v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v)) : [],
+    };
+  } catch {}
+}
+const cmdFor = (runner, args) => (runner === "toolbox"
+  ? ["toolbox", ["run", "-c", CFG.toolbox, "beads", ...args]]
+  : CFG.unsetEnv.length ? ["env", [...CFG.unsetEnv.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
+// vega is optional: the sentinel button only shows when a vega runs here (or in the configured toolbox).
+const vegaCmd = (runner, args) => (runner === "toolbox" ? ["toolbox", ["run", "-c", CFG.toolbox, "vega", ...args]] : ["vega", args]);
+async function detectVega(cwd, on) {
+  for (const runner of CFG.toolbox && !on ? ["local", "toolbox"] : ["local"]) {
+    try { const r = await exec(...vegaCmd(runner, ["--help"]), { cwd, on }); if (r.code === 0) return runner; } catch {}
+  }
+  return null;
+}
 const C = { bg: "#000000", panel: "#060906", hi: "#f4f1e8", mid: "#9bcd9b", lo: "#698b69", dim: "#3d553d", line: "#698b69", ink: "#000000", hover: "#ffa500", hoverBg: "#0d140d" };
 // Fonts after the film (typesetinthefuture.com/2014/12/01/alien): Helvetica clone for labels, a serif for MU/TH/UR's words.
 const readTextFileSafe = (p) => readTextFile(p);
@@ -56,6 +78,8 @@ export default class BeadsDetail extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
+        await loadConfig();
+        if (this.vega === undefined) { this.vega = null; this.vega = await detectVega(cwd, on); }
         const r = await exec(...cmdFor(runner, ["show", id, "--json"]), { cwd, on });
         const data = parseJson(r.stdout);
         const b = Array.isArray(data) ? data[0] : data;
@@ -120,16 +144,9 @@ export default class BeadsDetail extends View {
         const args = ["mux", "spawn", name, "--kind", SENTINEL.kind, "--tier", SENTINEL.tier, "--no-parent", "--prompt-file", file];
         if (cwd) args.push("--cwd", cwd);
         if (on) args.push("--machine", on);
-        // vega on this machine first; the toolbox only if the local one cannot run.
-        const attempts = [["vega", args], ...(TOOLBOX && !on ? [["toolbox", ["run", "-c", TOOLBOX, "vega", ...args]]] : [])];
-        let last = null;
-        for (const [cmd, a] of attempts) {
-          let r = null;
-          try { r = await exec(cmd, a, { cwd, on }); } catch (e) { last = { code: 127, stderr: String(e), stdout: "" }; continue; }
-          last = r;
-          if (r.code === 0) { ok = true; break; }
-          if (!/GLIBC|not found|command not found/i.test(`${r.stderr}${r.stdout}`)) break; // a real vega error: do not retry elsewhere
-        }
+        const r = await exec(...vegaCmd(this.vega, args), { cwd, on });
+        ok = r.code === 0;
+        const last = r;
         const text = `${last?.stdout ?? ""}\n${last?.stderr ?? ""}`.split("\n").map((l) => l.trim()).filter(Boolean);
         msg = ok ? (text[0] ?? `spawned ${name}`) : (text.find((l) => /error|message|hint|not/i.test(l)) ?? text[0] ?? "spawn failed");
         if (ok) notify({ title: "Sentinel spawned", body: `${name} for ${b.id}`, level: "success" });
@@ -210,7 +227,7 @@ export default class BeadsDetail extends View {
     if (this.spawnState === "running") sentinel.child(div().text_size(12).text_color(C.hi).child("> ENGAGING…"));
     if (this.spawnState === "done") sentinel.child(div().text_size(12).text_color(C.mid).child(`> SENTINEL ONLINE: ${up(this.spawnMsg)}`));
     if (this.spawnState === "failed") sentinel.child(div().text_size(12).text_color(C.hi).child(`!! SPAWN FAILED: ${up(this.spawnMsg)} !!`));
-    body.child(sentinel);
+    if (this.vega) body.child(sentinel);
 
     const meta = v_flex().gap(8)
       .child(h_flex().gap(20).flex_wrap()
