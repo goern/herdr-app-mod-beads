@@ -17,7 +17,9 @@ import { exec, props, closeOverlay, appHome, writeTextFile, readTextFile, notify
 // Optional per-user settings in <herdr-app home>/data/beads-ready/config.json, e.g.
 //   { "toolbox": "code", "unsetEnv": ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST"] }
 // toolbox: a toolbox container that runs beads/vega when none is found on this machine.
-// unsetEnv: environment variables the local beads is started without. Both are off by default.
+// unsetEnv: environment variables the local beads is started without, but only for projects whose
+//   .beads/metadata.json says dolt_mode "embedded" (a server-mode project needs those variables to find its server).
+//   Both settings are off by default.
 let CFG = { toolbox: null, unsetEnv: [] };
 async function loadConfig() {
   try {
@@ -30,9 +32,18 @@ async function loadConfig() {
     };
   } catch {}
 }
+// Variables to unset for the project being read; set by unsetFor() before each round of commands.
+let UNSET = [];
+async function unsetFor(cwd, on) {
+  if (!CFG.unsetEnv.length || on || !cwd) return [];
+  try {
+    const m = JSON.parse(await readTextFile(`${cwd}/.beads/metadata.json`));
+    return m && m.dolt_mode === "embedded" ? CFG.unsetEnv : [];
+  } catch { return []; }
+}
 const cmdFor = (runner, args) => (runner === "toolbox"
   ? ["toolbox", ["run", "-c", CFG.toolbox, "beads", ...args]]
-  : CFG.unsetEnv.length ? ["env", [...CFG.unsetEnv.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
+  : UNSET.length ? ["env", [...UNSET.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
 // vega is optional: the sentinel button only shows when a vega runs here (or in the configured toolbox).
 const vegaCmd = (runner, args) => (runner === "toolbox" ? ["toolbox", ["run", "-c", CFG.toolbox, "vega", ...args]] : ["vega", args]);
 async function detectVega(cwd, on) {
@@ -79,6 +90,7 @@ export default class BeadsDetail extends View {
     cx.spawn(async (cx) => {
       try {
         await loadConfig();
+        UNSET = await unsetFor(cwd, on);
         if (this.vega === undefined) { this.vega = null; this.vega = await detectVega(cwd, on); }
         const r = await exec(...cmdFor(runner, ["show", id, "--json"]), { cwd, on });
         const data = parseJson(r.stdout);

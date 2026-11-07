@@ -92,7 +92,7 @@ Everything works without configuration. Optional settings go into
 | Key | Meaning |
 | --- | --- |
 | `toolbox` | A toolbox container. When no suitable local `beads` (>= 1.3) or `vega` exists, it is run as `toolbox run -c <name> …`. |
-| `unsetEnv` | Environment variables the local `beads` is started without (via `env -u`). Use it when your environment points `beads` at a shared Dolt server but the project keeps its database in `.beads/`. |
+| `unsetEnv` | Environment variables the local `beads` is started without (via `env -u`), **only for projects whose `.beads/metadata.json` has `dolt_mode: "embedded"`**; server-mode projects keep them. Use it when your environment points `beads` at a shared Dolt server but the project keeps its database in `.beads/`. |
 
 A local `beads` is always tried first. Pin the panel to one folder (instead of the focused pane) with the mod prop
 `{"cwd": "/path/to/project"}` in the layout block. The shock timing, the poll interval and the sentinel's `kind` and

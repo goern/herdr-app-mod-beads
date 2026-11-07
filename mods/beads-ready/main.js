@@ -18,7 +18,9 @@ const MIN = [1, 3];
 // Optional per-user settings in <herdr-app home>/data/beads-ready/config.json, e.g.
 //   { "toolbox": "code", "unsetEnv": ["BEADS_DOLT_SHARED_SERVER", "BEADS_DOLT_SERVER_HOST"] }
 // toolbox: a toolbox container that runs beads/vega when none is found on this machine.
-// unsetEnv: environment variables the local beads is started without. Both are off by default.
+// unsetEnv: environment variables the local beads is started without, but only for projects whose
+//   .beads/metadata.json says dolt_mode "embedded" (a server-mode project needs those variables to find its server).
+//   Both settings are off by default.
 let CFG = { toolbox: null, unsetEnv: [] };
 async function loadConfig() {
   try {
@@ -31,9 +33,18 @@ async function loadConfig() {
     };
   } catch {}
 }
+// Variables to unset for the project being read; set by unsetFor() before each round of commands.
+let UNSET = [];
+async function unsetFor(cwd, on) {
+  if (!CFG.unsetEnv.length || on || !cwd) return [];
+  try {
+    const m = JSON.parse(await readTextFile(`${cwd}/.beads/metadata.json`));
+    return m && m.dolt_mode === "embedded" ? CFG.unsetEnv : [];
+  } catch { return []; }
+}
 const cmdFor = (runner, args) => (runner === "toolbox"
   ? ["toolbox", ["run", "-c", CFG.toolbox, "beads", ...args]]
-  : CFG.unsetEnv.length ? ["env", [...CFG.unsetEnv.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
+  : UNSET.length ? ["env", [...UNSET.flatMap((v) => ["-u", v]), "beads", ...args]] : ["beads", args]);
 const runnersFor = (on) => (CFG.toolbox && !on ? ["local", "toolbox"] : ["local"]);
 
 const POLL_MS = 5000; // refresh while shown
@@ -147,6 +158,7 @@ export default class BeadsReady extends View {
     cx.spawn(async (cx) => {
       let state, info = "", items = [], blocked = [];
       await loadConfig();
+      UNSET = await unsetFor(cwd, on);
       try {
         let runner = null, tooOld = null;
         for (const name of runnersFor(on)) {
