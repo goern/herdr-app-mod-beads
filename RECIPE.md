@@ -112,6 +112,9 @@ assignee / dates / labels as small captioned fields, description, design, accept
 - **Art**: `skull.svg` (16x12 pixel skull with horns, `crispEdges`), `alien.svg` (28x14 side profile of an elongated
   head with a fanged snout), seven 24 px stroke type icons.
 - **Optional config** `<app home>/data/beads-ready/config.json`: `{ "toolbox": "<container>", "unsetEnv": ["VAR", …] }`.
+  `unsetEnv` is applied per project: before each round of commands both mods read `<cwd>/.beads/metadata.json`
+  (`readTextFile`, a file outside the mod's own folder) and start `beads` through `env -u VAR …` only when `dolt_mode`
+  is `"embedded"`. Server-mode projects, remote machines (`on`) and unreadable metadata keep the environment untouched.
 
 ## Watch out
 
@@ -120,7 +123,9 @@ assignee / dates / labels as small captioned fields, description, design, accept
 - The shipped `main` layout is read-only and never docks the mod by itself; the layout file here is a clone and is
   not updated when herdr changes `main`.
 - `beads` run through the app inherits the app's environment. A `BEADS_DOLT_SHARED_SERVER` set there makes the local
-  `beads` look for the database on a Dolt server instead of the project's `.beads`; `unsetEnv` exists for that.
+  `beads` look for the database on a Dolt server instead of the project's `.beads`; `unsetEnv` exists for that. It
+  must stay limited to `dolt_mode: "embedded"` projects: a server-mode project needs those variables to find its
+  server and fails with `dolt circuit breaker is open` without them.
 - `beads ready` stops at 100 beads by default, so the mod passes `--limit 0`.
 - Timers keep running while the panel is hidden; the poll is cheap but not free.
 - The sentinel is started with `--no-parent` (a click has no parent agent pane), so vega does not track it. vega's
@@ -142,4 +147,6 @@ assignee / dates / labels as small captioned fields, description, design, accept
 - Clicking a card opens the record; clicking a tree row opens that bead and `◂ BACK` returns; the bead id copies on click;
   the alien-head button (tooltip `close view`) closes it.
 - `herdr-app do beads-ready.shock` visibly tears and flashes the panel for under a second and it recovers.
+- With `unsetEnv` configured, a server-mode project (`dolt_mode: "server"`) and an embedded project (`dolt_mode:
+  "embedded"`) both list their beads when focused one after the other.
 - Without `vega` the skull button is absent; with it, `PUSH` starts a sentinel and `PULL` does nothing.
